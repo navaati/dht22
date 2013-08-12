@@ -1,0 +1,20 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+  compatible = "ti,beaglebone", "ti,beaglebone-black";
+  
+  /* identification */
+  part-number = "BB-DHT22";
+  version = "00A2";
+  
+  fragment@0 {
+    target = <&ocp>;
+    __overlay__ {
+      dht22_test {
+        compatible = "aosong,dht22";
+        gpios = <&gpio1 30 0>;
+      };
+    };
+  };
+};
