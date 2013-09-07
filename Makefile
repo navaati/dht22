@@ -1,5 +1,4 @@
-#kv = $(shell uname -r)
-kv = 3.8.13-8-ARCH
+kv = $(shell uname -r)
 
 dtbo = BB-DHT22-00A2.dtbo
 
