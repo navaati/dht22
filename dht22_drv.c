@@ -10,17 +10,32 @@
 #include "dht22.h"
 #include "state_machine.h"
 
+static inline int checksum_ok(struct dht22_priv* priv) {
+  return priv->data[0]+priv->data[1]+priv->data[2]+priv->data[3] == priv->data[4];
+}
+
 static ssize_t dht22_show_temperature(struct device *dev, struct device_attribute *attr, char *buf) {
-  struct dht22_priv* priv = dev_get_drvdata(dev);
+  struct dht22_priv* priv;
+  int temp;
   
   if (read_dht22(dev)) {
-    printk(KERN_ERR "BIG FAIL NRNRNR ! State: %u, bitCount: %u\n", priv->state, priv->bitCount);
+    dev_err(dev, "State: %u, bitCount: %u\n", priv->state, priv->bitCount);
     return -EIO;
   }
   
-  int temp = 0; /* TODO: Calculate stuff here */
+  priv = dev_get_drvdata(dev);
   
-  return sprintf(buf, "%d\n", temp);
+  if (!checksum_ok(priv)) {
+    dev_err(dev, "Checksum not ok\n");
+    return -EIO;
+  }
+  
+  temp = priv->data[2] & 0x7F;
+  temp <<= 8;
+  temp += priv->data[3];
+  temp *= 100;
+  
+  return scnprintf(buf, PAGE_SIZE, "%d\n", temp);
 }
 
 static SENSOR_DEVICE_ATTR(temp1_input, S_IRUGO, dht22_show_temperature, NULL, 0);
@@ -37,37 +52,40 @@ static const struct attribute_group dht22_attr_group = {
 };
 
 static int dht22_probe(struct platform_device *pdev) { 
-  struct dht22_platform_data* pdata = pdev->dev.platform_data;
+  struct device* dev;
+  struct dht22_platform_data* pdata;
   struct dht22_priv* priv;
   
-  priv = devm_kzalloc(&pdev->dev,sizeof(struct dht22_priv),GFP_KERNEL);
+  dev = &pdev->dev;
+  
+  priv = devm_kzalloc(dev,sizeof(struct dht22_priv),GFP_KERNEL);
   if (!priv)
     return -ENOMEM;
 
+  pdata = dev->platform_data;
   if (pdata)
     priv->gpio = pdata->gpio;
   else
-    priv->gpio = of_get_gpio(pdev->dev.of_node, 0);
-  printk(KERN_INFO "Creating dht22 for gpio %d\n", priv->gpio);
+    priv->gpio = of_get_gpio(dev->of_node, 0);
+  dev_info(dev, "Creating dht22 for gpio %d\n", priv->gpio);
   
   if(!gpio_is_valid(priv->gpio)) {
-    printk(KERN_ERR "Invalid GPIO number : %u",priv->gpio);
+    dev_err(dev, "Invalid GPIO number : %u",priv->gpio);
     return -EINVAL;
   }
   if(gpio_cansleep(priv->gpio)) {
-    printk(KERN_ERR "Calls for GPIO number %u can sleep, driver can't use it",priv->gpio);
+    dev_err(dev, "Calls for GPIO number %u can sleep, driver can't use it",priv->gpio);
     return -EFAULT;
   }
-  if (gpio_request_one(priv->gpio, GPIOF_IN, dev_name(&pdev->dev))) {
-    printk(KERN_ERR "Can't request GPIO number %u",priv->gpio);
+  if (gpio_request_one(priv->gpio, GPIOF_IN, dev_name(dev))) {
+    dev_err(dev, "Can't request GPIO number %u",priv->gpio);
     return -EFAULT;
   }
   
-  sysfs_create_group(&pdev->dev.kobj, &dht22_attr_group);
+  sysfs_create_group(&dev->kobj, &dht22_attr_group);
   
   platform_set_drvdata(pdev,priv);
   
-  printk("Created device %s\n", dev_name(&pdev->dev));
   return 0;
 }
 

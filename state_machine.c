@@ -9,7 +9,7 @@
 #include "state_machine.h"
 
 static void startup_pulse(unsigned gpio);
-static irqreturn_t handler(int, void*);
+static irqreturn_t dht22_handler(int, void*);
 
 static DECLARE_WAIT_QUEUE_HEAD(acquisition);
 
@@ -20,33 +20,49 @@ static void startup_pulse(unsigned gpio) {
 }
 
 int read_dht22(struct device* dev) {
-  struct dht22_priv* priv = dev_get_drvdata(dev);
+  struct dht22_priv* priv;
   int r;
+  int irq;
   
-  int irq = gpio_to_irq(priv->gpio);
-  printk(KERN_DEBUG "irq: %u", irq);
-  
-  startup_pulse(priv->gpio);
+  priv = dev_get_drvdata(dev);
   
   priv->state = START;
-  request_irq(irq, handler, IRQF_TRIGGER_FALLING, dev_name(dev), priv);
+  priv->data[0] = 0;
+  priv->data[1] = 0;
+  priv->data[2] = 0;
+  priv->data[3] = 0;
+  priv->data[4] = 0;
+  priv->bitCount = 0;
+  priv->byteCount = 0;
 
-  trace_printk("Before wait\n");
+  irq = gpio_to_irq(priv->gpio);
+  
+  startup_pulse(priv->gpio);
+ 
+  request_irq(irq, dht22_handler, IRQF_TRIGGER_FALLING | IRQF_NO_THREAD, dev_name(dev), dev);
+
   if(wait_event_interruptible_timeout(acquisition, priv->state==DONE, msecs_to_jiffies(100)) > 0)
     r = 0;
   else
     r = -1;
-  trace_printk("After wait\n");
   
   free_irq(irq, priv);
   return r;
 }
 
-static irqreturn_t handler(int irq, void* dev_id) {
-  ktime_t currTime = ktime_get();
-  trace_printk("Fire in the hole !/n");
-  struct dht22_priv* priv = (struct dht22_priv*)dev_id;
+static irqreturn_t dht22_handler(int irq, void* dev_id) {
+  ktime_t currTime;
+  struct device* dev;
+  struct dht22_priv* priv;
   s64 timeDiff;
+  int currBit;
+  
+  currTime = ktime_get();
+  dev = (struct device*)dev_id;
+  priv = dev_get_drvdata(dev);
+  timeDiff = ktime_us_delta(currTime,priv->lastIntTime);
+  
+  trace_printk("tD = %lld us, state = %d, byte.bit = %u.%u, data = %*phC\n", (long long)timeDiff, priv->state, priv->byteCount, priv->bitCount, 5, priv->data);
   
   switch(priv->state) {
   case START:
@@ -56,10 +72,9 @@ static irqreturn_t handler(int irq, void* dev_id) {
     priv->state = DATA_READ;
     break;
   case DATA_READ:
-    timeDiff = ktime_us_delta(currTime,priv->lastIntTime);
     
-    int currBit = (timeDiff < 98) ? 0 : 1;
-    priv->data[priv->byteCount] &= currBit << (7 - priv->bitCount);
+    currBit = (timeDiff < 98) ? 0 : 1;
+    priv->data[priv->byteCount] |= currBit << (7 - priv->bitCount);
     priv->bitCount++;
     
     if (priv->bitCount > 7) {
@@ -73,7 +88,7 @@ static irqreturn_t handler(int irq, void* dev_id) {
 
     break;
   case DONE:
-    printk(KERN_ERR "Interrput occured while state is DONE\n");
+    dev_err(dev, "Interrupt occured while state is DONE\n");
   }
   
   priv->lastIntTime = currTime;
