@@ -6,6 +6,7 @@ struct dht22_platform_data {
 };
 
 typedef enum {
+     READY,
      START,
      WARMUP,
      DATA_READ,
@@ -16,9 +17,18 @@ struct dht22_priv {
   unsigned gpio;
   volatile state_t state;
   volatile ktime_t lastIntTime;
-  volatile u8 data[5];
-  volatile u8 bitCount;
-  volatile u8 byteCount;
+  volatile union {
+    volatile u8 data[5];
+    struct {
+      u8 rh_int;
+      u8 rh_dec;
+      u8 t_int;
+      u8 t_dec;
+      u8 checksum;
+    };
+  };
+  volatile int bitCount;
+  volatile int byteCount;
 };
 
 #endif /* H_DHT22 */

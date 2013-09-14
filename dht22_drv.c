@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/platform_device.h>
 #include <linux/gpio.h>
 #include <linux/of_gpio.h>
@@ -11,28 +12,28 @@
 #include "state_machine.h"
 
 static inline int checksum_ok(struct dht22_priv* priv) {
-  return priv->data[0]+priv->data[1]+priv->data[2]+priv->data[3] == priv->data[4];
+  return priv->checksum == priv->data[0]+priv->data[1]+priv->data[2]+priv->data[3];
 }
 
 static ssize_t dht22_show_temperature(struct device *dev, struct device_attribute *attr, char *buf) {
   struct dht22_priv* priv;
   int temp;
   
+  priv = dev_get_drvdata(dev);
+  
   if (read_dht22(dev)) {
     dev_err(dev, "State: %u, bitCount: %u\n", priv->state, priv->bitCount);
     return -EIO;
-  }
-  
-  priv = dev_get_drvdata(dev);
+  }  
   
   if (!checksum_ok(priv)) {
     dev_err(dev, "Checksum not ok\n");
     return -EIO;
   }
   
-  temp = priv->data[2] & 0x7F;
+  temp = priv->t_int & 0x7F;
   temp <<= 8;
-  temp += priv->data[3];
+  temp += priv->t_dec;
   temp *= 100;
   
   return scnprintf(buf, PAGE_SIZE, "%d\n", temp);
@@ -82,6 +83,8 @@ static int dht22_probe(struct platform_device *pdev) {
     return -EFAULT;
   }
   
+  request_irq(gpio_to_irq(priv->gpio), dht22_handler, IRQF_TRIGGER_FALLING | IRQF_NO_THREAD, dev_name(dev), dev);
+  
   sysfs_create_group(&dev->kobj, &dht22_attr_group);
   
   platform_set_drvdata(pdev,priv);
@@ -90,12 +93,18 @@ static int dht22_probe(struct platform_device *pdev) {
 }
 
 static int dht22_remove(struct platform_device *pdev) {
-  struct dht22_priv *priv = platform_get_drvdata(pdev);
+  struct dht22_priv *priv;
+  struct device* dev;
+  
+  priv = platform_get_drvdata(pdev);
+  dev = &pdev->dev;
+  
+  free_irq(gpio_to_irq(priv->gpio), dev);
   
   gpio_direction_input(priv->gpio);
   gpio_free(priv->gpio);
   
-  sysfs_remove_group(&pdev->dev.kobj, &dht22_attr_group);
+  sysfs_remove_group(&dev->kobj, &dht22_attr_group);
   
   platform_set_drvdata(pdev, NULL);
   
